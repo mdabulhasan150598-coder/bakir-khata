@@ -203,7 +203,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 height: 50,
                 child: ElevatedButton(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: type == 'due' ? Colors.rose : Colors.teal,
+                    backgroundColor: type == 'due' ? Colors.red : Colors.teal,
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
@@ -416,10 +416,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                         child: ListTile(
                           leading: CircleAvatar(
-                            backgroundColor: isDue ? Colors.rose.shade50 : Colors.teal.shade50,
+                            backgroundColor: isDue ? Colors.red.shade50 : Colors.teal.shade50,
                             child: Icon(
                               isDue ? Icons.arrow_upward : Icons.arrow_downward,
-                              color: isDue ? Colors.rose : Colors.teal,
+                              color: isDue ? Colors.red : Colors.teal,
                               size: 20,
                             ),
                           ),
@@ -431,7 +431,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               Text(
                                 '${isDue ? "+" : "-"} ৳${tx.amount.toStringAsFixed(0)}',
                                 style: TextStyle(
-                                  color: isDue ? Colors.rose : Colors.teal,
+                                  color: isDue ? Colors.red : Colors.teal,
                                   fontWeight: FontWeight.bold,
                                   fontSize: 16,
                                 ),
@@ -462,7 +462,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   icon: const Icon(Icons.remove_circle_outline),
                   label: const Text('বাকি নিয়েছি'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.rose,
+                    backgroundColor: Colors.red,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
