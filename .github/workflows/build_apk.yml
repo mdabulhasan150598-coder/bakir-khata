@@ -22,6 +22,9 @@ jobs:
         with:
           channel: 'stable'
 
+      - name: অ্যান্ড্রয়েড ফাইল জেনারেট করা
+        run: flutter create . --platforms=android
+
       - name: প্যাকেজ ডাউনলোড
         run: flutter pub get
 
