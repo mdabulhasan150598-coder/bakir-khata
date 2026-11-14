@@ -341,11 +341,9 @@ class _HomeScreenState extends State<HomeScreen> {
       );
       await file.writeAsBytes(jsonBytes, flush: true);
       if (!mounted) return;
-      await SharePlus.instance.share(
-        ShareParams(
-          files: [XFile(file.path)],
-          text: 'আমার বাকির খাতার JSON ব্যাকআপ',
-        ),
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        text: 'আমার বাকির খাতার JSON ব্যাকআপ',
       );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
