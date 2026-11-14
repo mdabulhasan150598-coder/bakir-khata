@@ -4,6 +4,24 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 
+String normalizeDigits(String value) {
+  const bangla = '০১২৩৪৫৬৭৮৯';
+  const english = '0123456789';
+  for (var i = 0; i < bangla.length; i++) {
+    value = value.replaceAll(bangla[i], english[i]);
+  }
+  return value.replaceAll(',', '').replaceAll('٬', '').trim();
+}
+
+double? parseAmount(String value) => double.tryParse(normalizeDigits(value));
+
+String formatAmount(double amount) {
+  final rounded = amount.roundToDouble();
+  return (amount - rounded).abs() < 0.000001
+      ? amount.toStringAsFixed(0)
+      : amount.toStringAsFixed(2);
+}
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const BakiKhataApp());
@@ -53,14 +71,31 @@ class TxItem {
     'date': date,
   };
 
-  factory TxItem.fromMap(Map<String, dynamic> map) => TxItem(
-    id: map['id'],
-    shop: map['shop'],
-    type: map['type'],
-    amount: (map['amount'] as num).toDouble(),
-    note: map['note'] ?? '',
-    date: map['date'],
-  );
+  factory TxItem.fromMap(Map<String, dynamic> map) {
+    final id = map['id'];
+    final shop = map['shop'];
+    final type = map['type'];
+    final amount = map['amount'];
+    final note = map['note'] ?? '';
+    final date = map['date'];
+    if (id is! String || id.isEmpty ||
+        shop is! String || shop.isEmpty ||
+        (type != 'due' && type != 'payment') ||
+        amount is! num || !amount.toDouble().isFinite || amount <= 0 ||
+        note is! String || date is! String) {
+      throw const FormatException('Invalid transaction data');
+    }
+    DateTime? parsedDate = DateTime.tryParse(date);
+    if (parsedDate == null) throw const FormatException('Invalid transaction date');
+    return TxItem(
+      id: id,
+      shop: shop,
+      type: type,
+      amount: amount.toDouble(),
+      note: note,
+      date: date,
+    );
+  }
 }
 
 class HomeScreen extends StatefulWidget {
@@ -82,17 +117,38 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> loadData() async {
-    final prefs = await SharedPreferences.getInstance();
-    final shopList = prefs.getStringList('shops');
-    final txListJson = prefs.getString('txs');
-
-    setState(() {
-      if (shopList != null) shops = shopList;
-      if (txListJson != null) {
-        final List decoded = jsonDecode(txListJson);
-        transactions = decoded.map((e) => TxItem.fromMap(e)).toList();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final shopList = prefs.getStringList('shops');
+      final txListJson = prefs.getString('txs');
+      final loadedShops = shopList ?? ['কালাম স্টোর', 'মুদি দোকান'];
+      if (loadedShops.any((s) => s.trim().isEmpty) ||
+          loadedShops.toSet().length != loadedShops.length) {
+        throw const FormatException('Invalid shop list');
       }
-    });
+      var loadedTransactions = <TxItem>[];
+      if (txListJson != null) {
+        final decoded = jsonDecode(txListJson);
+        if (decoded is! List) throw const FormatException('Invalid saved transactions');
+        loadedTransactions = decoded.map((e) {
+          if (e is! Map) throw const FormatException('Invalid saved transaction');
+          return TxItem.fromMap(Map<String, dynamic>.from(e));
+        }).toList();
+      }
+      if (!mounted) return;
+      setState(() {
+        shops = loadedShops;
+        transactions = loadedTransactions;
+        if (selectedShop != 'ALL' && !shops.contains(selectedShop)) {
+          selectedShop = 'ALL';
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('সংরক্ষিত ডাটা পড়তে সমস্যা হয়েছে। ব্যাকআপ থাকলে রিস্টোর করুন।')),
+      );
+    }
   }
 
   Future<void> saveData() async {
@@ -100,7 +156,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await prefs.setStringList('shops', shops);
     final txListMap = transactions.map((e) => e.toMap()).toList();
     await prefs.setString('txs', jsonEncode(txListMap));
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
   double calculateTotalDue() {
@@ -134,13 +190,17 @@ class _HomeScreenState extends State<HomeScreen> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('বাতিল')),
           ElevatedButton(
-            onPressed: () {
+            onPressed: () async {
               final name = controller.text.trim();
-              if (name.isNotEmpty && !shops.contains(name)) {
-                shops.add(name);
-                saveData();
-                Navigator.pop(ctx);
+              if (name.isEmpty || shops.contains(name)) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(name.isEmpty ? 'দোকানের নাম লিখুন।' : 'এই দোকানটি আগে থেকেই আছে।')),
+                );
+                return;
               }
+              shops.add(name);
+              await saveData();
+              if (ctx.mounted) Navigator.pop(ctx);
             },
             child: const Text('যোগ করুন'),
           ),
@@ -186,6 +246,23 @@ class _HomeScreenState extends State<HomeScreen> {
                   if (val != null) setModalState(() => currentShop = val);
                 },
               ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.calendar_month, color: Colors.teal),
+                title: const Text('তারিখ'),
+                subtitle: Text(DateFormat('dd-MM-yyyy').format(selectedDate)),
+                trailing: const Icon(Icons.edit_calendar),
+                onTap: () async {
+                  final picked = await showDatePicker(
+                    context: ctx,
+                    initialDate: selectedDate,
+                    firstDate: DateTime(2000),
+                    lastDate: DateTime(2100),
+                    helpText: 'লেনদেনের তারিখ নির্বাচন করুন',
+                  );
+                  if (picked != null) setModalState(() => selectedDate = picked);
+                },
+              ),
               const SizedBox(height: 12),
               TextField(
                 controller: amountCtrl,
@@ -207,20 +284,24 @@ class _HomeScreenState extends State<HomeScreen> {
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
-                  onPressed: () {
-                    final amount = double.tryParse(amountCtrl.text) ?? 0;
-                    if (amount > 0 && currentShop.isNotEmpty) {
-                      transactions.add(TxItem(
-                        id: DateTime.now().millisecondsSinceEpoch.toString(),
-                        shop: currentShop,
-                        type: type,
-                        amount: amount,
-                        note: noteCtrl.text.trim(),
-                        date: DateFormat('yyyy-MM-dd').format(selectedDate),
-                      ));
-                      saveData();
-                      Navigator.pop(ctx);
+                  onPressed: () async {
+                    final amount = parseAmount(amountCtrl.text) ?? 0;
+                    if (amount <= 0 || currentShop.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('সঠিক টাকার পরিমাণ লিখুন এবং দোকান নির্বাচন করুন।')),
+                      );
+                      return;
                     }
+                    transactions.add(TxItem(
+                      id: DateTime.now().microsecondsSinceEpoch.toString(),
+                      shop: currentShop,
+                      type: type,
+                      amount: amount,
+                      note: noteCtrl.text.trim(),
+                      date: DateFormat('yyyy-MM-dd').format(selectedDate),
+                    ));
+                    await saveData();
+                    if (ctx.mounted) Navigator.pop(ctx);
                   },
                   child: const Text('সংরক্ষণ করুন', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                 ),
@@ -289,23 +370,52 @@ class _HomeScreenState extends State<HomeScreen> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('বাতিল')),
           ElevatedButton(
-            onPressed: () {
+            onPressed: () async {
               try {
-                final map = jsonDecode(controller.text.trim());
-                if (map['shops'] != null && map['txs'] != null) {
-                  shops = List<String>.from(map['shops']);
-                  final List txList = map['txs'];
-                  transactions = txList.map((e) => TxItem.fromMap(e)).toList();
-                  saveData();
-                  Navigator.pop(ctx);
+                final decoded = jsonDecode(controller.text.trim());
+                if (decoded is! Map ||
+                    decoded['shops'] is! List ||
+                    decoded['txs'] is! List) {
+                  throw const FormatException('Invalid backup structure');
+                }
+                final restoredShops = List<String>.from(decoded['shops']);
+                if (restoredShops.isEmpty ||
+                    restoredShops.any((s) => s.trim().isEmpty) ||
+                    restoredShops.toSet().length != restoredShops.length) {
+                  throw const FormatException('Invalid shops');
+                }
+                final restoredTransactions = (decoded['txs'] as List).map((e) {
+                  if (e is! Map) throw const FormatException('Invalid transaction');
+                  final tx = TxItem.fromMap(Map<String, dynamic>.from(e));
+                  if (!restoredShops.contains(tx.shop)) {
+                    throw const FormatException('Unknown shop in transaction');
+                  }
+                  return tx;
+                }).toList();
+
+                final oldShops = shops;
+                final oldTransactions = transactions;
+                shops = restoredShops;
+                transactions = restoredTransactions;
+                try {
+                  await saveData();
+                } catch (_) {
+                  shops = oldShops;
+                  transactions = oldTransactions;
+                  rethrow;
+                }
+                if (ctx.mounted) Navigator.pop(ctx);
+                if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('ডাটা সফলভাবে রিস্টোর হয়েছে!')),
                   );
                 }
-              } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('ভুল ব্যাকআপ কোড!')),
-                );
+              } catch (_) {
+                if (ctx.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('ভুল বা অসম্পূর্ণ ব্যাকআপ কোড! বর্তমান ডাটা অপরিবর্তিত আছে।')),
+                  );
+                }
               }
             },
             child: const Text('রিস্টোর'),
@@ -354,7 +464,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     const Text('আমার মোট বাকি দেনা', style: TextStyle(color: Colors.white70, fontSize: 14)),
                     const SizedBox(height: 6),
                     Text(
-                      '৳ ${calculateTotalDue().toStringAsFixed(0)}',
+                      '৳ ${formatAmount(calculateTotalDue())}',
                       style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold),
                     ),
                   ],
@@ -389,7 +499,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ...shops.map((s) => Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: ChoiceChip(
-                    label: Text('$s (৳${calculateShopDue(s).toStringAsFixed(0)})'),
+                    label: Text('$s (৳${formatAmount(calculateShopDue(s))})'),
                     selected: selectedShop == s,
                     onSelected: (val) => setState(() => selectedShop = s),
                   ),
@@ -407,8 +517,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 : ListView.builder(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     itemCount: filteredTxs.length,
+                    reverse: true,
                     itemBuilder: (ctx, idx) {
-                      final tx = filteredTxs.reversed.toList()[idx];
+                      final tx = filteredTxs[idx];
                       final isDue = tx.type == 'due';
                       return Card(
                         elevation: 0.5,
@@ -429,7 +540,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Text(
-                                '${isDue ? "+" : "-"} ৳${tx.amount.toStringAsFixed(0)}',
+                                '${isDue ? "+" : "-"} ৳${formatAmount(tx.amount)}',
                                 style: TextStyle(
                                   color: isDue ? Colors.red : Colors.teal,
                                   fontWeight: FontWeight.bold,
@@ -438,9 +549,28 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                               IconButton(
                                 icon: const Icon(Icons.delete_outline, size: 18, color: Colors.grey),
-                                onPressed: () {
-                                  transactions.removeWhere((t) => t.id == tx.id);
-                                  saveData();
+                                onPressed: () async {
+                                  final confirmed = await showDialog<bool>(
+                                    context: context,
+                                    builder: (dialogContext) => AlertDialog(
+                                      title: const Text('হিসাব মুছে ফেলবেন?'),
+                                      content: const Text('এই লেনদেনটি মুছে ফেললে তা আর তালিকায় দেখা যাবে না।'),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () => Navigator.pop(dialogContext, false),
+                                          child: const Text('না'),
+                                        ),
+                                        ElevatedButton(
+                                          onPressed: () => Navigator.pop(dialogContext, true),
+                                          child: const Text('মুছে ফেলুন'),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                  if (confirmed == true) {
+                                    transactions.removeWhere((t) => t.id == tx.id);
+                                    await saveData();
+                                  }
                                 },
                               ),
                             ],
