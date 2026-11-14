@@ -125,14 +125,6 @@ class _HomeScreenState extends State<HomeScreen> {
       final prefs = await SharedPreferences.getInstance();
       final shopList = prefs.getStringList('shops');
       final txListJson = prefs.getString('txs');
-      // পুরোনো ডিফল্ট দোকান দুটি আর স্বয়ংক্রিয়ভাবে দেখানো হবে না।
-      final loadedShops = (shopList ?? <String>[])
-          .where((s) => s != 'কালাম স্টোর' && s != 'মুদি দোকান')
-          .toList();
-      if (loadedShops.any((s) => s.trim().isEmpty) ||
-          loadedShops.toSet().length != loadedShops.length) {
-        throw const FormatException('Invalid shop list');
-      }
       var loadedTransactions = <TxItem>[];
       if (txListJson != null) {
         final decoded = jsonDecode(txListJson);
@@ -141,6 +133,17 @@ class _HomeScreenState extends State<HomeScreen> {
           if (e is! Map) throw const FormatException('Invalid saved transaction');
           return TxItem.fromMap(Map<String, dynamic>.from(e));
         }).toList();
+      }
+      // নতুন ইনস্টলে কোনো ডিফল্ট দোকান থাকবে না। তবে পুরোনো দোকানে হিসাব থাকলে
+      // সেই হিসাব হারানো ঠেকাতে সংশ্লিষ্ট নামটি পুরোনো রেকর্ডের জন্য রাখা হবে।
+      final loadedShops = (shopList ?? <String>[])
+          .where((s) =>
+              (s != 'কালাম স্টোর' && s != 'মুদি দোকান') ||
+              loadedTransactions.any((tx) => tx.shop == s))
+          .toList();
+      if (loadedShops.any((s) => s.trim().isEmpty) ||
+          loadedShops.toSet().length != loadedShops.length) {
+        throw const FormatException('Invalid shop list');
       }
       if (!mounted) return;
       setState(() {
