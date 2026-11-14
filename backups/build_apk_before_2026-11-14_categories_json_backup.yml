@@ -1,0 +1,51 @@
+name: Build Flutter APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: কোড চেকআউট
+        uses: actions/checkout@v4
+
+      - name: Java সেটআপ
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Flutter সেটআপ
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: প্রজেক্ট অটো-বিল্ড সেটআপ
+        run: |
+          # ১. একদম ফ্রেশ ও নির্ভুল ফোল্ডার তৈরি
+          flutter create app --project-name baki_khata --platforms=android
+          
+          # ২. আপনার মূল কোডটি নতুন প্রজেক্টে বসানো
+          if [ -f "lib/main.dart" ]; then
+            cp lib/main.dart app/lib/main.dart
+          elif [ -f "main.dart" ]; then
+            cp main.dart app/lib/main.dart
+          fi
+          
+          # ৩. প্যাকেজগুলো অটোমেটিক যোগ করা (YAML ভুলের কোনো সুযোগ নেই)
+          cd app
+          flutter pub add shared_preferences intl
+
+      - name: APK তৈরি করা
+        run: |
+          cd app
+          flutter build apk --release
+
+      - name: APK ফাইল আপলোড
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bakir-Khata-APK
+          path: app/build/app/outputs/flutter-apk/app-release.apk
