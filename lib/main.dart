@@ -1,8 +1,12 @@
 import 'dart:convert';
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 String normalizeDigits(String value) {
   const bangla = '০১২৩৪৫৬৭৮৯';
@@ -106,7 +110,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  List<String> shops = ['কালাম স্টোর', 'মুদি দোকান'];
+  List<String> shops = [];
   List<TxItem> transactions = [];
   String selectedShop = 'ALL';
 
@@ -121,7 +125,10 @@ class _HomeScreenState extends State<HomeScreen> {
       final prefs = await SharedPreferences.getInstance();
       final shopList = prefs.getStringList('shops');
       final txListJson = prefs.getString('txs');
-      final loadedShops = shopList ?? ['কালাম স্টোর', 'মুদি দোকান'];
+      // পুরোনো ডিফল্ট দোকান দুটি আর স্বয়ংক্রিয়ভাবে দেখানো হবে না।
+      final loadedShops = (shopList ?? <String>[])
+          .where((s) => s != 'কালাম স্টোর' && s != 'মুদি দোকান')
+          .toList();
       if (loadedShops.any((s) => s.trim().isEmpty) ||
           loadedShops.toSet().length != loadedShops.length) {
         throw const FormatException('Invalid shop list');
@@ -313,6 +320,158 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> exportBackupFile() async {
+    try {
+      final backupData = {
+        'app': 'bakir_khata',
+        'version': 1,
+        'saved_at': DateTime.now().toIso8601String(),
+        'shops': shops,
+        'txs': transactions.map((e) => e.toMap()).toList(),
+      };
+      final jsonBytes = utf8.encode(
+        const JsonEncoder.withIndent('  ').convert(backupData),
+      );
+      final directory = await getTemporaryDirectory();
+      final file = File(
+        '${directory.path}/bakir_khata_backup_${DateTime.now().millisecondsSinceEpoch}.json',
+      );
+      await file.writeAsBytes(jsonBytes, flush: true);
+      if (!mounted) return;
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile(file.path)],
+          text: 'আমার বাকির খাতার JSON ব্যাকআপ',
+        ),
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('শেয়ার মেনু থেকে Drive বা Files নির্বাচন করে JSON ব্যাকআপ সেভ করুন।'),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('ব্যাকআপ তৈরি করতে সমস্যা হয়েছে: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> restoreFromJsonFile() async {
+    try {
+      final pickedResult = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+        withData: true,
+      );
+      if (pickedResult == null || pickedResult.files.isEmpty) return;
+
+      final pickedFile = pickedResult.files.single;
+      final fileBytes = pickedFile.bytes ??
+          (pickedFile.path != null
+              ? await File(pickedFile.path!).readAsBytes()
+              : null);
+      if (fileBytes == null || fileBytes.isEmpty) {
+        throw const FormatException('JSON ফাইলটি পড়া যাচ্ছে না।');
+      }
+
+      final jsonText = utf8.decode(fileBytes, allowMalformed: false);
+      final decoded = jsonDecode(jsonText);
+      if (decoded is! Map ||
+          (decoded['app'] != null && decoded['app'] != 'bakir_khata') ||
+          decoded['shops'] is! List ||
+          decoded['txs'] is! List) {
+        throw const FormatException('এটি আমার বাকির খাতার সঠিক JSON ব্যাকআপ নয়।');
+      }
+      if (decoded['app'] == 'bakir_khata' && decoded['version'] != 1) {
+        throw const FormatException('ব্যাকআপ ফাইলের ভার্সন সমর্থিত নয়।');
+      }
+
+      final restoredShops = List<String>.from(decoded['shops']);
+      if (restoredShops.any((s) => s.trim().isEmpty) ||
+          restoredShops.toSet().length != restoredShops.length) {
+        throw const FormatException('ব্যাকআপে দোকানের নামের তথ্য সঠিক নয়।');
+      }
+      final restoredTransactions = (decoded['txs'] as List).map((item) {
+        if (item is! Map) {
+          throw const FormatException('ব্যাকআপে লেনদেনের তথ্য সঠিক নয়।');
+        }
+        final tx = TxItem.fromMap(Map<String, dynamic>.from(item));
+        if (!restoredShops.contains(tx.shop)) {
+          throw const FormatException('কোনো লেনদেনের দোকানের নাম ব্যাকআপে পাওয়া যায়নি।');
+        }
+        return tx;
+      }).toList();
+
+      if (!mounted) return;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('JSON ব্যাকআপ রিস্টোর করবেন?'),
+          content: Text(
+            '${pickedFile.name} ফাইল থেকে ${restoredTransactions.length}টি লেনদেন এবং '
+            '${restoredShops.length}টি দোকানের তথ্য ফিরিয়ে আনা হবে। '
+            'এতে এই ফোনের বর্তমান হিসাব ব্যাকআপের তথ্য দিয়ে প্রতিস্থাপিত হবে।',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('বাতিল'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('রিস্টোর করুন'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+
+      final prefs = await SharedPreferences.getInstance();
+      final oldShops = prefs.getStringList('shops');
+      final oldTxs = prefs.getString('txs');
+      try {
+        await prefs.setStringList('shops', restoredShops);
+        await prefs.setString(
+          'txs',
+          jsonEncode(restoredTransactions.map((e) => e.toMap()).toList()),
+        );
+      } catch (_) {
+        if (oldShops == null) {
+          await prefs.remove('shops');
+        } else {
+          await prefs.setStringList('shops', oldShops);
+        }
+        if (oldTxs == null) {
+          await prefs.remove('txs');
+        } else {
+          await prefs.setString('txs', oldTxs);
+        }
+        rethrow;
+      }
+
+      setState(() {
+        shops = restoredShops;
+        transactions = restoredTransactions;
+        selectedShop = 'ALL';
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('আলহামদুলিল্লাহ! JSON ব্যাকআপ সফলভাবে রিস্টোর হয়েছে।')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('JSON রিস্টোর করতে সমস্যা: $e')),
+        );
+      }
+    }
+  }
+
   void showBackupDialog() {
     showDialog(
       context: context,
@@ -322,105 +481,35 @@ class _HomeScreenState extends State<HomeScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text(
-              'আপনার ডাটা সম্পূর্ণ সুরক্ষিত রাখতে ব্যাকআপ কোডটি কপি করে ড্রাইভে বা নোটে সেভ রাখুন।',
+              'মিয়াপাড়া চাঁদা অ্যাপের মতো সরাসরি JSON ফাইল দিয়ে ব্যাকআপ ও রিস্টোর করুন।',
               style: TextStyle(fontSize: 13, color: Colors.black54),
             ),
             const SizedBox(height: 16),
-            ElevatedButton.icon(
-              icon: const Icon(Icons.copy),
-              label: const Text('ব্যাকআপ কোড কপি করুন'),
-              onPressed: () {
-                final backupData = {
-                  'shops': shops,
-                  'txs': transactions.map((e) => e.toMap()).toList(),
-                };
-                Clipboard.setData(ClipboardData(text: jsonEncode(backupData)));
-                Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('ব্যাকআপ ক্লিপবোর্ডে কপি হয়েছে! নোটে সেভ রাখুন।')),
-                );
-              },
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.save_alt),
+                label: const Text('JSON ব্যাকআপ সেভ করুন'),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  exportBackupFile();
+                },
+              ),
             ),
-            const SizedBox(height: 10),
-            OutlinedButton.icon(
-              icon: const Icon(Icons.restore),
-              label: const Text('কোড থেকে রিস্টোর করুন'),
-              onPressed: () {
-                Navigator.pop(ctx);
-                showRestoreDialog();
-              },
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.restore),
+                label: const Text('JSON ফাইল থেকে রিস্টোর করুন'),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  restoreFromJsonFile();
+                },
+              ),
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  void showRestoreDialog() {
-    final controller = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('ব্যাকআপ পেস্ট করুন'),
-        content: TextField(
-          controller: controller,
-          maxLines: 4,
-          decoration: const InputDecoration(hintText: 'কপি করা ব্যাকআপ টেক্সট এখানে পেস্ট করুন'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('বাতিল')),
-          ElevatedButton(
-            onPressed: () async {
-              try {
-                final decoded = jsonDecode(controller.text.trim());
-                if (decoded is! Map ||
-                    decoded['shops'] is! List ||
-                    decoded['txs'] is! List) {
-                  throw const FormatException('Invalid backup structure');
-                }
-                final restoredShops = List<String>.from(decoded['shops']);
-                if (restoredShops.isEmpty ||
-                    restoredShops.any((s) => s.trim().isEmpty) ||
-                    restoredShops.toSet().length != restoredShops.length) {
-                  throw const FormatException('Invalid shops');
-                }
-                final restoredTransactions = (decoded['txs'] as List).map((e) {
-                  if (e is! Map) throw const FormatException('Invalid transaction');
-                  final tx = TxItem.fromMap(Map<String, dynamic>.from(e));
-                  if (!restoredShops.contains(tx.shop)) {
-                    throw const FormatException('Unknown shop in transaction');
-                  }
-                  return tx;
-                }).toList();
-
-                final oldShops = shops;
-                final oldTransactions = transactions;
-                shops = restoredShops;
-                transactions = restoredTransactions;
-                try {
-                  await saveData();
-                } catch (_) {
-                  shops = oldShops;
-                  transactions = oldTransactions;
-                  rethrow;
-                }
-                if (ctx.mounted) Navigator.pop(ctx);
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('ডাটা সফলভাবে রিস্টোর হয়েছে!')),
-                  );
-                }
-              } catch (_) {
-                if (ctx.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('ভুল বা অসম্পূর্ণ ব্যাকআপ কোড! বর্তমান ডাটা অপরিবর্তিত আছে।')),
-                  );
-                }
-              }
-            },
-            child: const Text('রিস্টোর'),
-          ),
-        ],
       ),
     );
   }
@@ -597,7 +686,16 @@ class _HomeScreenState extends State<HomeScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                   ),
-                  onPressed: () => showTxModal('due'),
+                  onPressed: () {
+                    if (shops.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('আগে নিজের পছন্দমতো একটি দোকান যোগ করুন।')),
+                      );
+                      addShopDialog();
+                    } else {
+                      showTxModal('due');
+                    }
+                  },
                 ),
               ),
               const SizedBox(width: 12),
@@ -611,7 +709,16 @@ class _HomeScreenState extends State<HomeScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                   ),
-                  onPressed: () => showTxModal('payment'),
+                  onPressed: () {
+                    if (shops.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('আগে নিজের পছন্দমতো একটি দোকান যোগ করুন।')),
+                      );
+                      addShopDialog();
+                    } else {
+                      showTxModal('payment');
+                    }
+                  },
                 ),
               ),
             ],
