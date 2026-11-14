@@ -37,7 +37,7 @@ jobs:
           
           # ৩. প্যাকেজগুলো অটোমেটিক যোগ করা (YAML ভুলের কোনো সুযোগ নেই)
           cd app
-          flutter pub add shared_preferences intl file_picker path_provider cross_file
+          flutter pub add shared_preferences intl file_picker path_provider
           flutter pub add share_plus:^10.1.4
 
       - name: APK তৈরি করা
