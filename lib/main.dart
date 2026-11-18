@@ -120,7 +120,6 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   List<String> shops = [];
   List<TxItem> transactions = [];
-  String selectedShop = 'ALL';
 
   @override
   void initState() {
@@ -157,9 +156,6 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         shops = loadedShops;
         transactions = loadedTransactions;
-        if (selectedShop != 'ALL' && !shops.contains(selectedShop)) {
-          selectedShop = 'ALL';
-        }
       });
     } catch (_) {
       if (!mounted) return;
@@ -195,6 +191,44 @@ class _HomeScreenState extends State<HomeScreen> {
     return total;
   }
 
+  void openShopDetails(String shop) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ShopDetailsScreen(
+          shop: shop,
+          transactions: () => transactions.where((tx) => tx.shop == shop).toList(),
+          balance: () => calculateShopDue(shop),
+          onAddTransaction: (type) => showTxModal(type, initialShop: shop),
+          onDeleteTransaction: deleteTransaction,
+        ),
+      ),
+    );
+  }
+
+  Future<void> deleteTransaction(TxItem tx) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('হিসাব মুছে ফেলবেন?'),
+        content: const Text('এই লেনদেনটি মুছে ফেললে তা আর তালিকায় দেখা যাবে না।'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('না'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('মুছে ফেলুন'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      transactions.removeWhere((item) => item.id == tx.id);
+      await saveData();
+    }
+  }
+
   void addShopDialog() {
     final controller = TextEditingController();
     showDialog(
@@ -227,10 +261,12 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void showTxModal(String type) {
+  Future<void> showTxModal(String type, {String? initialShop}) async {
     final amountCtrl = TextEditingController();
     final noteCtrl = TextEditingController();
-    String currentShop = shops.isNotEmpty ? shops.first : '';
+    String currentShop = initialShop != null && shops.contains(initialShop)
+        ? initialShop
+        : (shops.isNotEmpty ? shops.first : '');
     DateTime selectedDate = DateTime.now();
 
     showModalBottomSheet(
@@ -465,7 +501,6 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         shops = restoredShops;
         transactions = restoredTransactions;
-        selectedShop = 'ALL';
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -525,9 +560,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final filteredTxs = selectedShop == 'ALL'
-        ? transactions
-        : transactions.where((t) => t.shop == selectedShop).toList();
     final totalPaid = transactions
         .where((t) => t.type == 'payment')
         .fold<double>(0, (sum, t) => sum + t.amount);
@@ -667,7 +699,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       borderRadius: BorderRadius.circular(18),
                       child: InkWell(
                         borderRadius: BorderRadius.circular(18),
-                        onTap: () => setState(() => selectedShop = isSelected ? 'ALL' : shop),
+                        onTap: () => openShopDetails(shop),
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 13),
                           decoration: BoxDecoration(
@@ -695,7 +727,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     Text(shop, maxLines: 1, overflow: TextOverflow.ellipsis,
                                         style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: Color(0xFF26384A))),
                                     const SizedBox(height: 3),
-                                    Text(isSelected ? 'লেনদেন দেখছেন • আবার চাপলে সব দেখাবে' : 'দোকানের হিসাব দেখতে চাপ দিন',
+                                    const Text('বিস্তারিত ও লেনদেন দেখতে চাপ দিন',
                                         style: const TextStyle(fontSize: 10, color: Color(0xFF8A98A8))),
                                   ],
                                 ),
@@ -717,84 +749,6 @@ class _HomeScreenState extends State<HomeScreen> {
                             ],
                           ),
                         ),
-                      ),
-                    ),
-                  );
-                }),
-              const SizedBox(height: 14),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(selectedShop == 'ALL' ? 'সাম্প্রতিক লেনদেন' : '$selectedShop-এর লেনদেন'.replaceFirst(r'$selectedShop', selectedShop),
-                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Color(0xFF172B4D))),
-                  if (selectedShop != 'ALL')
-                    TextButton(onPressed: () => setState(() => selectedShop = 'ALL'), child: const Text('সব দেখুন')),
-                ],
-              ),
-              if (filteredTxs.isEmpty)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(24),
-                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18)),
-                  child: const Column(
-                    children: [
-                      Icon(Icons.receipt_long_outlined, size: 34, color: Color(0xFF9AA8B7)),
-                      SizedBox(height: 8),
-                      Text('এখনো কোনো লেনদেন নেই', style: TextStyle(color: Color(0xFF718096), fontWeight: FontWeight.w600)),
-                    ],
-                  ),
-                )
-              else
-                ...filteredTxs.reversed.take(30).map((tx) {
-                  final isDue = tx.type == 'due';
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(17)),
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 13, vertical: 3),
-                      leading: Container(
-                        width: 42, height: 42,
-                        decoration: BoxDecoration(
-                          color: isDue ? const Color(0xFFFFEFED) : const Color(0xFFE8F6F1),
-                          borderRadius: BorderRadius.circular(13),
-                        ),
-                        child: Icon(isDue ? Icons.shopping_bag_outlined : Icons.check_circle_outline,
-                            color: isDue ? const Color(0xFFD45B50) : const Color(0xFF16856D), size: 21),
-                      ),
-                      title: Text(tx.shop, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
-                      subtitle: Text('${tx.note.isEmpty ? "বিবরণ নেই" : tx.note}  •  ${tx.date}',
-                          style: const TextStyle(fontSize: 11, color: Color(0xFF8493A5))),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text('${isDue ? "+" : "−"} ৳${formatAmount(tx.amount)}',
-                              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13,
-                                  color: isDue ? const Color(0xFFD45B50) : const Color(0xFF16856D))),
-                          PopupMenuButton<String>(
-                            icon: const Icon(Icons.more_vert, color: Color(0xFF8795A5), size: 20),
-                            onSelected: (value) async {
-                              if (value != 'delete') return;
-                              final confirmed = await showDialog<bool>(
-                                context: context,
-                                builder: (dialogContext) => AlertDialog(
-                                  title: const Text('হিসাব মুছে ফেলবেন?'),
-                                  content: const Text('এই লেনদেনটি মুছে ফেললে তা আর তালিকায় দেখা যাবে না।'),
-                                  actions: [
-                                    TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('না')),
-                                    ElevatedButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('মুছে ফেলুন')),
-                                  ],
-                                ),
-                              );
-                              if (confirmed == true) {
-                                transactions.removeWhere((t) => t.id == tx.id);
-                                await saveData();
-                              }
-                            },
-                            itemBuilder: (_) => const [
-                              PopupMenuItem(value: 'delete', child: Text('হিসাব মুছুন')),
-                            ],
-                          ),
-                        ],
                       ),
                     ),
                   );
@@ -874,3 +828,261 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 }
+
+class ShopDetailsScreen extends StatefulWidget {
+  final String shop;
+  final List<TxItem> Function() transactions;
+  final double Function() balance;
+  final Future<void> Function(String type) onAddTransaction;
+  final Future<void> Function(TxItem tx) onDeleteTransaction;
+
+  const ShopDetailsScreen({
+    super.key,
+    required this.shop,
+    required this.transactions,
+    required this.balance,
+    required this.onAddTransaction,
+    required this.onDeleteTransaction,
+  });
+
+  @override
+  State<ShopDetailsScreen> createState() => _ShopDetailsScreenState();
+}
+
+class _ShopDetailsScreenState extends State<ShopDetailsScreen> {
+  Future<void> _add(String type) async {
+    await widget.onAddTransaction(type);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _delete(TxItem tx) async {
+    await widget.onDeleteTransaction(tx);
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = widget.transactions().reversed.toList();
+    final dueTotal = items
+        .where((tx) => tx.type == 'due')
+        .fold<double>(0, (sum, tx) => sum + tx.amount);
+    final paidTotal = items
+        .where((tx) => tx.type == 'payment')
+        .fold<double>(0, (sum, tx) => sum + tx.amount);
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF4F7FB),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFFF4F7FB),
+        foregroundColor: const Color(0xFF172B4D),
+        title: Text(widget.shop,
+            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18)),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(22),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF173B5E), Color(0xFF087E83)],
+              ),
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x25173B5E),
+                  blurRadius: 20,
+                  offset: Offset(0, 9),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('এই দোকানে বর্তমান বাকি',
+                    style: TextStyle(color: Colors.white70, fontSize: 13)),
+                const SizedBox(height: 8),
+                Text('৳ ${formatAmount(widget.balance())}',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 32,
+                        fontWeight: FontWeight.w800)),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _detailTotal('মোট বাকি নিয়েছি', dueTotal,
+                          const Color(0xFFFFD6D1)),
+                    ),
+                    Expanded(
+                      child: _detailTotal('মোট পরিশোধ', paidTotal,
+                          const Color(0xFFBDEBDD)),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: () => _add('due'),
+                  icon: const Icon(Icons.shopping_bag_outlined),
+                  label: const Text('বাকি নিয়েছি'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFFD65D52),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: () => _add('payment'),
+                  icon: const Icon(Icons.payments_outlined),
+                  label: const Text('টাকা পরিশোধ'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF087E83),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 22),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('লেনদেনের বিবরণ',
+                  style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF172B4D))),
+              Text('${items.length}টি',
+                  style: const TextStyle(
+                      color: Color(0xFF8493A5), fontSize: 12)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (items.isEmpty)
+            Container(
+              padding: const EdgeInsets.all(26),
+              decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(18)),
+              child: const Column(
+                children: [
+                  Icon(Icons.receipt_long_outlined,
+                      size: 36, color: Color(0xFF9AA8B7)),
+                  SizedBox(height: 9),
+                  Text('এই দোকানে এখনো কোনো লেনদেন নেই',
+                      style: TextStyle(
+                          color: Color(0xFF718096),
+                          fontWeight: FontWeight.w600)),
+                  SizedBox(height: 4),
+                  Text('উপরের বাটন থেকে প্রথম হিসাবটি যোগ করুন',
+                      style: TextStyle(
+                          fontSize: 12, color: Color(0xFF8493A5))),
+                ],
+              ),
+            )
+          else
+            ...items.map((tx) {
+              final isDue = tx.type == 'due';
+              return Container(
+                margin: const EdgeInsets.only(bottom: 9),
+                decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(17)),
+                child: ListTile(
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 13, vertical: 4),
+                  leading: Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: isDue
+                          ? const Color(0xFFFFEFED)
+                          : const Color(0xFFE8F6F1),
+                      borderRadius: BorderRadius.circular(13),
+                    ),
+                    child: Icon(
+                      isDue
+                          ? Icons.shopping_bag_outlined
+                          : Icons.check_circle_outline,
+                      color: isDue
+                          ? const Color(0xFFD45D52)
+                          : const Color(0xFF16856D),
+                    ),
+                  ),
+                  title: Text(
+                    tx.note.isEmpty
+                        ? (isDue ? 'বাকি পণ্য নিয়েছি' : 'টাকা পরিশোধ')
+                        : tx.note,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w700, fontSize: 13),
+                  ),
+                  subtitle: Text(
+                    '${isDue ? "বাকি নেওয়া" : "পরিশোধ"} • ${DateFormat('dd-MM-yyyy').format(DateTime.parse(tx.date))}',
+                    style: const TextStyle(
+                        fontSize: 11, color: Color(0xFF8493A5)),
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '${isDue ? "+" : "−"} ৳${formatAmount(tx.amount)}',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 13,
+                          color: isDue
+                              ? const Color(0xFFD45D52)
+                              : const Color(0xFF16856D),
+                        ),
+                      ),
+                      PopupMenuButton<String>(
+                        icon: const Icon(Icons.more_vert,
+                            color: Color(0xFF8795A5), size: 20),
+                        onSelected: (value) {
+                          if (value == 'delete') _delete(tx);
+                        },
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(
+                              value: 'delete', child: Text('হিসাব মুছুন')),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+        ],
+      ),
+    );
+  }
+
+  Widget _detailTotal(String label, double amount, Color color) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label,
+            style: const TextStyle(color: Colors.white70, fontSize: 11)),
+        const SizedBox(height: 4),
+        Text('৳ ${formatAmount(amount)}',
+            style: TextStyle(
+                color: color, fontSize: 16, fontWeight: FontWeight.w800)),
+      ],
+    );
+  }
+}
+
