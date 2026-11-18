@@ -691,7 +691,6 @@ class _HomeScreenState extends State<HomeScreen> {
               else
                 ...shops.map((shop) {
                   final balance = calculateShopDue(shop);
-                  final isSelected = selectedShop == shop;
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 9),
                     child: Material(
@@ -705,8 +704,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(18),
                             border: Border.all(
-                              color: isSelected ? const Color(0xFF0B8585) : const Color(0xFFE9EEF4),
-                              width: isSelected ? 1.5 : 1,
+                              color: const Color(0xFFE9EEF4),
+                              width: 1,
                             ),
                           ),
                           child: Row(
