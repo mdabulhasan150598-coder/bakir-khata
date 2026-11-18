@@ -2,7 +2,7 @@ name: Build Flutter APK
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, premium-modern-ui ]
   workflow_dispatch:
 
 jobs:
