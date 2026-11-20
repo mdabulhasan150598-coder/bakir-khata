@@ -95,7 +95,31 @@ class BakiKhataApp extends StatelessWidget {
                         const SizedBox(height: 3),
                         Text(date == null ? toBanglaDigits(tx.date) : formatBanglaDate(date), style: const TextStyle(fontSize: 11, color: Color(0xFF8793A5))),
                       ])),
-                      Text('${due ? '+' : '−'} ৳${formatAmount(tx.amount)}', style: TextStyle(fontWeight: FontWeight.w800, color: due ? const Color(0xFFD84D4D) : const Color(0xFF0F8A78))),
+                      Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                        Text('${due ? '+' : '−'} ৳${formatAmount(tx.amount)}', style: TextStyle(fontWeight: FontWeight.w800, color: due ? const Color(0xFFD84D4D) : const Color(0xFF0F8A78))),
+                        IconButton(
+                          visualDensity: VisualDensity.compact, padding: EdgeInsets.zero, constraints: const BoxConstraints(),
+                          icon: const Icon(Icons.delete_outline_rounded, size: 18, color: Color(0xFF9AA6B5)),
+                          onPressed: () async {
+                            final ok = await showDialog<bool>(
+                              context: context,
+                              builder: (dctx) => AlertDialog(
+                                title: const Text('হিসাব মুছে ফেলবেন?'),
+                                content: const Text('এই লেনদেনটি স্থায়ীভাবে মুছে যাবে।'),
+                                actions: [
+                                  TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('বাতিল')),
+                                  FilledButton(onPressed: () => Navigator.pop(dctx, true), child: const Text('মুছে ফেলুন')),
+                                ],
+                              ),
+                            );
+                            if (ok == true) {
+                              transactions.removeWhere((item) => item.id == tx.id);
+                              await saveData();
+                              if (ctx.mounted) Navigator.pop(ctx);
+                            }
+                          },
+                        ),
+                      ])
                     ]));
                 })),
           Padding(padding: const EdgeInsets.fromLTRB(20, 8, 20, 18), child: Row(children: [
