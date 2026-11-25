@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
@@ -128,11 +129,15 @@ class _HomeScreenState extends State<HomeScreen> {
   List<String> shops = [];
   List<TxItem> transactions = [];
   String selectedShop = 'ALL';
+  Timer? _telegramBackupTimer;
+  bool _telegramBackupSending = false;
+  bool _telegramAutoEnabled = false;
 
   @override
   void initState() {
     super.initState();
     loadData();
+    _loadTelegramSettings();
   }
 
   Future<void> loadData() async {
@@ -182,6 +187,196 @@ class _HomeScreenState extends State<HomeScreen> {
     final txListMap = transactions.map((e) => e.toMap()).toList();
     await prefs.setString('txs', jsonEncode(txListMap));
     if (mounted) setState(() {});
+    _scheduleTelegramAutoBackup();
+  }
+
+  Future<void> _loadTelegramSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _telegramAutoEnabled = prefs.getBool('telegram_auto_backup') ?? false;
+    });
+  }
+
+  void _scheduleTelegramAutoBackup() {
+    _telegramBackupTimer?.cancel();
+    if (!_telegramAutoEnabled || _telegramBackupSending) return;
+    _telegramBackupTimer = Timer(const Duration(seconds: 8), () {
+      sendTelegramBackup(automatic: true);
+    });
+  }
+
+  Future<File> _createBackupFile() async {
+    final backupData = {
+      'app': 'bakir_khata',
+      'version': 1,
+      'saved_at': DateTime.now().toIso8601String(),
+      'shops': shops,
+      'txs': transactions.map((e) => e.toMap()).toList(),
+    };
+    final jsonBytes = utf8.encode(
+      const JsonEncoder.withIndent('  ').convert(backupData),
+    );
+    final directory = await getTemporaryDirectory();
+    final file = File(
+      '${directory.path}/bakir_khata_backup_${DateTime.now().millisecondsSinceEpoch}.json',
+    );
+    await file.writeAsBytes(jsonBytes, flush: true);
+    return file;
+  }
+
+  Future<void> sendTelegramBackup({bool automatic = false}) async {
+    if (_telegramBackupSending) return;
+    final prefs = await SharedPreferences.getInstance();
+    final token = (prefs.getString('telegram_bot_token') ?? '').trim();
+    final chatId = (prefs.getString('telegram_chat_id') ?? '').trim();
+    if (token.isEmpty || chatId.isEmpty) {
+      if (!automatic && mounted) {
+        showTelegramSettingsDialog();
+      }
+      return;
+    }
+
+    _telegramBackupSending = true;
+    HttpClient? client;
+    try {
+      final file = await _createBackupFile();
+      final boundary = '----BakiKhata${DateTime.now().microsecondsSinceEpoch}';
+      client = HttpClient();
+      final request = await client.postUrl(
+        Uri.parse('https://api.telegram.org/bot$token/sendDocument'),
+      );
+      request.headers.set(
+        HttpHeaders.contentTypeHeader,
+        'multipart/form-data; boundary=$boundary',
+      );
+      request.write('--$boundary\r\n');
+      request.write('Content-Disposition: form-data; name="chat_id"\r\n\r\n');
+      request.write('$chatId\r\n');
+      request.write('--$boundary\r\n');
+      request.write('Content-Disposition: form-data; name="caption"\r\n\r\n');
+      request.write('আমার বাকির খাতার ${automatic ? "স্বয়ংক্রিয়" : "ম্যানুয়াল"} ব্যাকআপ\r\n');
+      request.write('--$boundary\r\n');
+      request.write('Content-Disposition: form-data; name="document"; filename="${file.uri.pathSegments.last}"\r\n');
+      request.write('Content-Type: application/json\r\n\r\n');
+      await request.addStream(file.openRead());
+      request.write('\r\n--$boundary--\r\n');
+      final response = await request.close();
+      final responseText = await response.transform(utf8.decoder).join();
+      final result = jsonDecode(responseText);
+      if (response.statusCode < 200 ||
+          response.statusCode >= 300 ||
+          result is! Map ||
+          result['ok'] != true) {
+        throw Exception('Telegram সার্ভার ব্যাকআপ গ্রহণ করেনি।');
+      }
+      if (!automatic && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Telegram-এ ব্যাকআপ সফলভাবে পাঠানো হয়েছে।')),
+        );
+      }
+    } catch (e) {
+      if (mounted && !automatic) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Telegram ব্যাকআপ ব্যর্থ: $e')),
+        );
+      }
+    } finally {
+      client?.close(force: true);
+      _telegramBackupSending = false;
+    }
+  }
+
+  void showTelegramSettingsDialog() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    final tokenController = TextEditingController(
+      text: prefs.getString('telegram_bot_token') ?? '',
+    );
+    final chatController = TextEditingController(
+      text: prefs.getString('telegram_chat_id') ?? '',
+    );
+    var autoEnabled = prefs.getBool('telegram_auto_backup') ?? false;
+    showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, updateDialog) => AlertDialog(
+          title: const Text('Telegram ব্যাকআপ সেটআপ'),
+          content: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const Text(
+                'BotFather থেকে পাওয়া Bot Token এবং আপনার Chat ID দিন। বটকে আগে Telegram-এ Start করতে হবে।',
+                style: TextStyle(fontSize: 12, color: Colors.black54),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: tokenController,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: 'Telegram Bot Token',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: chatController,
+                keyboardType: TextInputType.text,
+                decoration: const InputDecoration(
+                  labelText: 'Telegram Chat ID',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: autoEnabled,
+                onChanged: (value) => updateDialog(() => autoEnabled = value ?? false),
+                title: const Text('অটো ব্যাকআপ চালু রাখুন'),
+                subtitle: const Text('ডাটা পরিবর্তনের ৮ সেকেন্ড পর ব্যাকআপ যাবে।'),
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+              const Text(
+                'Bot Token কাউকে দেবেন না। এটি শুধু এই ফোনে সংরক্ষিত থাকবে এবং JSON ব্যাকআপে যাবে না।',
+                style: TextStyle(fontSize: 11, color: Colors.deepOrange),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('বাতিল'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final token = tokenController.text.trim();
+                final chatId = chatController.text.trim();
+                if (token.isEmpty || chatId.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Bot Token ও Chat ID দুটোই দিতে হবে।')),
+                  );
+                  return;
+                }
+                await prefs.setString('telegram_bot_token', token);
+                await prefs.setString('telegram_chat_id', chatId);
+                await prefs.setBool('telegram_auto_backup', autoEnabled);
+                if (!mounted) return;
+                setState(() => _telegramAutoEnabled = autoEnabled);
+                Navigator.pop(dialogContext);
+                tokenController.dispose();
+                chatController.dispose();
+                if (autoEnabled) {
+                  sendTelegramBackup(automatic: false);
+                }
+              },
+              child: const Text('সেভ করুন'),
+            ),
+          ],
+        ),
+      ),
+    ).then((_) {
+      tokenController.dispose();
+      chatController.dispose();
+    });
   }
 
   double calculateTotalDue() {
@@ -340,21 +535,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> exportBackupFile() async {
     try {
-      final backupData = {
-        'app': 'bakir_khata',
-        'version': 1,
-        'saved_at': DateTime.now().toIso8601String(),
-        'shops': shops,
-        'txs': transactions.map((e) => e.toMap()).toList(),
-      };
-      final jsonBytes = utf8.encode(
-        const JsonEncoder.withIndent('  ').convert(backupData),
-      );
-      final directory = await getTemporaryDirectory();
-      final file = File(
-        '${directory.path}/bakir_khata_backup_${DateTime.now().millisecondsSinceEpoch}.json',
-      );
-      await file.writeAsBytes(jsonBytes, flush: true);
+      final file = await _createBackupFile();
       if (!mounted) return;
       await Share.shareXFiles(
         [XFile(file.path)],
@@ -501,6 +682,30 @@ class _HomeScreenState extends State<HomeScreen> {
               style: TextStyle(fontSize: 13, color: Colors.black54),
             ),
             const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                icon: const Icon(Icons.telegram),
+                label: const Text('Telegram-এ ব্যাকআপ পাঠান'),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  sendTelegramBackup(automatic: false);
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.settings_outlined),
+                label: const Text('Telegram সেটআপ / অটো ব্যাকআপ'),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  showTelegramSettingsDialog();
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
