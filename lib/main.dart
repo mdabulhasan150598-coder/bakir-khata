@@ -250,17 +250,22 @@ class _HomeScreenState extends State<HomeScreen> {
         HttpHeaders.contentTypeHeader,
         'multipart/form-data; boundary=$boundary',
       );
-      request.write('--$boundary\r\n');
-      request.write('Content-Disposition: form-data; name="chat_id"\r\n\r\n');
-      request.write('$chatId\r\n');
-      request.write('--$boundary\r\n');
-      request.write('Content-Disposition: form-data; name="caption"\r\n\r\n');
-      request.write('আমার বাকির খাতার ${automatic ? "স্বয়ংক্রিয়" : "ম্যানুয়াল"} ব্যাকআপ\r\n');
-      request.write('--$boundary\r\n');
-      request.write('Content-Disposition: form-data; name="document"; filename="${file.uri.pathSegments.last}"\r\n');
-      request.write('Content-Type: application/json\r\n\r\n');
+      void writeText(String value) {
+        request.add(utf8.encode(value));
+      }
+
+      writeText('--$boundary\r\n');
+      writeText('Content-Disposition: form-data; name="chat_id"\r\n\r\n');
+      writeText('$chatId\r\n');
+      writeText('--$boundary\r\n');
+      writeText('Content-Disposition: form-data; name="caption"\r\n\r\n');
+      writeText('আমার বাকির খাতার ${automatic ? "স্বয়ংক্রিয়" : "ম্যানুয়াল"} ব্যাকআপ\r\n');
+      writeText('--$boundary\r\n');
+      // Use a plain ASCII filename to avoid invalid header characters.
+      writeText('Content-Disposition: form-data; name="document"; filename="bakir_khata_backup.json"\r\n');
+      writeText('Content-Type: application/json\r\n\r\n');
       await request.addStream(file.openRead());
-      request.write('\r\n--$boundary--\r\n');
+      writeText('\r\n--$boundary--\r\n');
       final response = await request.close();
       final responseText = await response.transform(utf8.decoder).join();
       final result = jsonDecode(responseText);
