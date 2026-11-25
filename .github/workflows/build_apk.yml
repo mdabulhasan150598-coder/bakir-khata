@@ -28,6 +28,22 @@ jobs:
           # ১. একদম ফ্রেশ ও নির্ভুল ফোল্ডার তৈরি
           flutter create app --project-name baki_khata --platforms=android
 
+          # Telegram backup-এর জন্য Android Internet permission নিশ্চিত করা
+          python - <<'PY'
+          from pathlib import Path
+          manifest = Path("app/android/app/src/main/AndroidManifest.xml")
+          content = manifest.read_text()
+          permissions = [
+              '    <uses-permission android:name="android.permission.INTERNET"/>',
+              '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>',
+          ]
+          insert_at = content.find(">", content.find("<manifest")) + 1
+          missing = [p for p in permissions if p.split('"')[1] not in content]
+          if missing:
+              content = content[:insert_at] + "\\n" + "\\n".join(missing) + content[insert_at:]
+              manifest.write_text(content)
+          PY
+
           # ২. আপনার মূল কোডটি নতুন প্রজেক্টে বসানো
           if [ -f "lib/main.dart" ]; then
             cp lib/main.dart app/lib/main.dart
