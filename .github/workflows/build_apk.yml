@@ -40,7 +40,7 @@ jobs:
           insert_at = content.find(">", content.find("<manifest")) + 1
           missing = [p for p in permissions if p.split('"')[1] not in content]
           if missing:
-              content = content[:insert_at] + "\\n" + "\\n".join(missing) + content[insert_at:]
+              content = content[:insert_at] + "\n" + "\n".join(missing) + content[insert_at:]
               manifest.write_text(content)
           PY
 
